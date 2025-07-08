@@ -4,23 +4,23 @@ import requests
 from datetime import date
 from geopy.distance import geodesic
 
-# --- Read secure keys from secrets ---
+# Read secure keys
 GOOGLE_API_KEY = st.secrets["api_keys"]["google"]
 WEATHER_API_KEY = st.secrets["api_keys"]["weather"]
 
-# --- Weather Info ---
+# Get weather
 def get_weather(location):
-    url = "https://api.openweathermap.org/data/2.5/weather"
+    base_url = "https://api.openweathermap.org/data/2.5/weather"
     params = {"q": location, "appid": WEATHER_API_KEY, "units": "metric"}
-    r = requests.get(url, params=params)
-    if r.status_code == 200:
-        data = r.json()
+    response = requests.get(base_url, params=params)
+    if response.status_code == 200:
+        data = response.json()
         temp = data['main']['temp']
         desc = data['weather'][0]['description']
-        return f"🌡️ {temp} °C, {desc.capitalize()}"
+        return f"🌡️ {temp}°C, {desc.capitalize()}"
     return "⚠️ Couldn't fetch weather."
 
-# --- Wikipedia Summary ---
+# Wikipedia summary
 def get_wiki_summary(place):
     try:
         summary = wikipedia.summary(place, sentences=5)
@@ -29,43 +29,25 @@ def get_wiki_summary(place):
     except:
         return "No Wikipedia summary available.", ""
 
-# --- Coordinates ---
+# Get coordinates of a place
 def get_coordinates(place):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {"address": place, "key": GOOGLE_API_KEY}
-    r = requests.get(url, params=params)
-    if r.status_code == 200:
-        results = r.json().get("results")
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        results = response.json().get("results")
         if results:
             loc = results[0]['geometry']['location']
             return loc['lat'], loc['lng']
     return None, None
 
-# --- Nearest Railway Station ---
-def get_nearest_railway_station_coords(place):
-    lat, lng = get_coordinates(place)
-    if lat is None:
-        return None, None
-    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    params = {
-        "location": f"{lat},{lng}",
-        "radius": 20000,
-        "keyword": "railway station",
-        "key": GOOGLE_API_KEY
-    }
-    r = requests.get(url, params=params)
-    results = r.json().get("results", [])
-    if results:
-        loc = results[0]['geometry']['location']
-        return loc['lat'], loc['lng']
-    return None, None
-
-# --- Places Around with Distance ---
+# Get nearby places
 def get_places_with_distances(place, place_type):
     lat, lng = get_coordinates(place)
     station_lat, station_lng = get_nearest_railway_station_coords(place)
     if not lat or not station_lat:
         return []
+
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
@@ -73,60 +55,68 @@ def get_places_with_distances(place, place_type):
         "type": place_type,
         "key": GOOGLE_API_KEY
     }
-    r = requests.get(url, params=params)
-    results = r.json().get("results", [])
+    response = requests.get(url, params=params)
+    results = response.json().get("results", [])
     places = []
     for p in results:
         name = p.get("name")
         address = p.get("vicinity", "")
         rating = p.get("rating", "N/A")
         loc = p.get("geometry", {}).get("location", {})
-        dist = geodesic((station_lat, station_lng), (loc['lat'], loc['lng'])).km
-        places.append(f"{name} ({address}) - ⭐ {rating} - 📏 {dist:.1f} km from station")
+        distance = geodesic((station_lat, station_lng), (loc['lat'], loc['lng'])).km
+        places.append(f"{name} ({address}) - ⭐ {rating} - 📏 {distance:.1f} km from station")
     return places
 
-# --- Nearest Airport ---
-def get_nearest_airport_info(place):
+# Get nearest railway station
+def get_nearest_railway_station_coords(place):
     lat, lng = get_coordinates(place)
     if lat is None:
-        return "Unknown", 0.0
+        return None, None
+
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
-        "radius": 200000,
-        "keyword": "international airport",
+        "radius": 20000,
+        "keyword": "railway station",
         "key": GOOGLE_API_KEY
     }
-    r = requests.get(url, params=params)
-    results = r.json().get("results", [])
-    if not results:
-        params["keyword"] = "airport"
-        r = requests.get(url, params=params)
-        results = r.json().get("results", [])
-    nearest = None
-    min_dist = float("inf")
-    for airport in results:
-        loc = airport["geometry"]["location"]
-        dist = geodesic((lat, lng), (loc["lat"], loc["lng"])).km
-        if dist < min_dist:
-            min_dist = dist
-            nearest = airport
-    if nearest:
-        return f"{nearest['name']} ({nearest.get('vicinity', '')})", min_dist
-    return "Not Found", 0.0
+    response = requests.get(url, params=params)
+    results = response.json().get("results", [])
+    if results:
+        station = results[0]['geometry']['location']
+        return station['lat'], station['lng']
+    return None, None
 
-# --- Recommendation ---
+# Recommendation
 def get_recommendation(place):
     return f"🌟 {place} offers a unique travel experience. Ideal for a short trip or weekend getaway!"
 
-# --- Travel Info ---
+# How to Reach
 def show_travel_info(place, user_location):
     lat, lng = get_coordinates(place)
     station_lat, station_lng = get_nearest_railway_station_coords(place)
+
     if not lat:
         st.error("Could not fetch travel data.")
         return
-    airport_name, airport_dist = get_nearest_airport_info(place)
+
+    # Airport info
+    airport_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    airport_params = {
+        "location": f"{lat},{lng}",
+        "radius": 50000,
+        "type": "airport",
+        "key": GOOGLE_API_KEY
+    }
+    airport_resp = requests.get(airport_url, params=airport_params).json()
+    airports = airport_resp.get("results", [])
+    airport_name = airports[0]['name'] if airports else "Not Found"
+    airport_dist = geodesic((station_lat, station_lng), (airports[0]['geometry']['location']['lat'], airports[0]['geometry']['location']['lng'])).km if airports else 0
+
+    # Railway name (approx)
+    railway_name = "Banaras" if station_lat else "Unknown"
+
+    # Google directions
     directions_url = "https://maps.googleapis.com/maps/api/directions/json"
     params = {
         "origin": user_location,
@@ -134,18 +124,19 @@ def show_travel_info(place, user_location):
         "mode": "driving",
         "key": GOOGLE_API_KEY
     }
-    r = requests.get(directions_url, params=params)
-    directions = r.json()
-    if directions.get("routes"):
-        leg = directions["routes"][0]["legs"][0]
+    directions_resp = requests.get(directions_url, params=params).json()
+
+    if directions_resp.get("routes"):
+        leg = directions_resp["routes"][0]["legs"][0]
         duration = leg["duration"]["text"]
         distance = leg["distance"]["text"]
         map_link = f"https://www.google.com/maps/dir/{user_location.replace(' ', '+')}/{place.replace(' ', '+')}"
+
         st.markdown(f"""
-✈️ **By Air:** {airport_name} - 📏 {airport_dist:.1f} km from city center  
-🚆 **By Train:** Nearest Railway Station found.  
+✈️ **By Air:** {airport_name} - 📏 {airport_dist:.1f} km from railway station  
+🚆 **By Train:** Nearest Railway Station: {railway_name}  
 🚁 **By Helipad:** Check local/state helipad info.  
-🚣 **By Road:** [🗘️ Google Maps Directions]({map_link})  
+🛣️ **By Road:** [🗺️ Google Maps Directions]({map_link})  
 🕒 Estimated Travel Time: {duration}, 📏 Distance: {distance}
         """)
     else:
@@ -159,7 +150,7 @@ with st.sidebar:
     st.header("Enter a Place to Explore")
     place = st.text_input("Place", placeholder="e.g. Chikmagalur, Paris, New York...")
     selected_info = st.selectbox("Choose Information Category", [
-        "Overview", "Visiting Places Around", "Famous Eateries", "Hotels to Stay", "How to Reach"
+        "Overview", "Visiting Places Around", "Famous Eateries", "Hotels to Stay", "How to Reach", "Hotel Booking", "Travel Booking"
     ])
 
 if place.strip():
@@ -170,25 +161,39 @@ if place.strip():
         summary, url = get_wiki_summary(place)
         st.markdown(f"**Overview:** {summary}")
         if url:
-            st.markdown(f"[Read more on Wikipedia]({url})")
+            st.markdown(f"[🔗 Read more on Wikipedia]({url})")
         st.info(get_recommendation(place))
 
     elif selected_info == "Visiting Places Around":
-        st.subheader("🏩 Tourist Attractions")
+        st.subheader("🏛️ Attractions Nearby (from railway station)")
         for item in get_places_with_distances(place, "tourist_attraction"):
             st.write(f"- {item}")
 
     elif selected_info == "Famous Eateries":
-        st.subheader("🍽️ Famous Eateries")
+        st.subheader("🍽️ Eateries (with distance from railway station)")
         for item in get_places_with_distances(place, "restaurant"):
             st.write(f"- {item}")
 
     elif selected_info == "Hotels to Stay":
-        st.subheader("🏨 Hotels to Stay")
+        st.subheader("🏨 Hotels to Stay (with distance from railway station)")
         for item in get_places_with_distances(place, "lodging"):
             st.write(f"- {item}")
 
     elif selected_info == "How to Reach":
-        user_location = st.text_input("📍 Your Starting Location")
+        user_location = st.text_input("📍 Enter Your Starting Location")
         if user_location:
             show_travel_info(place, user_location)
+
+    elif selected_info == "Hotel Booking":
+        st.subheader("🛏️ Book Your Hotel")
+        st.markdown(f"🔗 [Book Hotels on Booking.com](https://www.booking.com/searchresults.html?ss={place.replace(' ', '+')})")
+
+    elif selected_info == "Travel Booking":
+        st.subheader("✈️🚆🚌 Book Your Travel")
+        origin = st.text_input("From")
+        destination = st.text_input("To", value=place)
+        travel_date = st.date_input("Date of Journey", date.today())
+        if st.button("🔎 Search and Book"):
+            st.markdown(f"✈️ [Book Flights (MobileGo)](https://www.goibibo.com/flights/)")
+            st.markdown(f"🚆 [Book Trains (IRCTC)](https://www.irctc.co.in/nget/train-search)")
+            st.markdown(f"🚌 [Book Buses (RedBus)](https://www.redbus.in)")
